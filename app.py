@@ -131,7 +131,7 @@ async def notion_set_page_content(notion_client, page, body, properties):
         print(f'Setting property `{prop.name}` to `{prop.value}`...')
         try:
             page.set_property(prop.name, prop.value)
-        except (ValueError, AttributeError) as e:
+        except (ValueError, AttributeError, TypeError) as e:
             print(
                 f'\tERROR: Could not set property `{prop.name}`: {e}'
             )
