@@ -1,9 +1,10 @@
 
 import os
 
-from flask import Flask
-from flask import request
-from flask import jsonify
+from sanic import Sanic
+from sanic import response
+from sanic.response import json
+from sanic.exceptions import InvalidUsage
 
 from urllib.error import HTTPError
 
@@ -12,14 +13,14 @@ from md2notion.upload import convert as convert_md_to_notion
 from md2notion.upload import uploadBlock as upload_notion_block
 
 
-app = Flask(__name__)
+app = Sanic(__name__)
 
 
 def create_notion_db_row(token, db_url, body='', properties=[]):
     try:
         client = NotionClient(token_v2=token)
     except HTTPError as e:
-        raise InvalidUsage(
+        raise AppException(
             f'Could not login to notion: {e}'
         )
 
@@ -73,6 +74,7 @@ def create_notion_db_row(token, db_url, body='', properties=[]):
 
     # Return result
     result = {}
+    result['status'] = 'success'
     result['added_url'] = row.get_browseable_url()
     if len(errors) > 0:
         result['errors'] = errors
@@ -81,20 +83,25 @@ def create_notion_db_row(token, db_url, body='', properties=[]):
 
 
 @app.route('/add_db_row', methods=['POST'])
-def add_db_row_handler():
+def add_db_row_handler(request):
     notion_token = os.environ.get('TOKEN')
     if notion_token is None:
-        raise InvalidUsage(
+        raise AppException(
             'Could not login to notion: Token was not set '
             'in environment variable `TOKEN`'
         )
 
-    json_data = request.get_json(force=True)
+    try:
+        json_data = request.json
+    except InvalidUsage:
+        raise AppException(
+            'Body was not sent in JSON format'
+        )
 
     required_params = ['db_url']
     missing_params = set(required_params) - set(json_data.keys())
     if len(missing_params) > 0:
-        raise InvalidUsage(
+        raise AppException(
             f'JSON is missing required parameters: '
             f'{", ".join(missing_params)}'
         )
@@ -105,10 +112,10 @@ def add_db_row_handler():
 
     result = create_notion_db_row(notion_token, db_url, body, properties)
 
-    return jsonify(result)
+    return response.json(result)
 
 
-class InvalidUsage(Exception):
+class AppException(Exception):
     status_code = 400
 
     def __init__(self, message, status_code=None, payload=None):
@@ -120,15 +127,16 @@ class InvalidUsage(Exception):
 
     def to_dict(self):
         rv = dict(self.payload or ())
+        rv['status'] = 'failure'
         rv['error'] = self.message
         return rv
 
 
-@app.errorhandler(InvalidUsage)
-def handle_invalid_usage(error):
-    response = jsonify(error.to_dict())
-    response.status_code = error.status_code
-    return response
+@app.exception(AppException)
+def handle_app_exception(request, error):
+    resp = response.json(error.to_dict())
+    resp.status = error.status_code
+    return resp
 
 
 if __name__ == '__main__':
