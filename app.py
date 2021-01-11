@@ -106,15 +106,6 @@ def notion_add_db_row(notion_client, db_url):
 
 async def notion_set_page_content(notion_client, page, body, properties):
     print(f'Setting content for page: {page.get_browseable_url()}')
-    # Convert body markdown to notion blocks and upload to notion
-    notion_blocks = convert_md_to_notion(body)
-    for idx, block_descriptor in enumerate(notion_blocks):
-        pct = (idx + 1) / len(notion_blocks) * 100
-        print(
-            f'Uploading {block_descriptor["type"].__name__}, '
-            f'{idx+1}/{len(notion_blocks)} ({pct:.1f}%)'
-        )
-        upload_notion_block(block_descriptor, page, None)
 
     for prop in properties:
         print(f'Setting property `{prop.name}` to `{prop.value}`...')
@@ -125,6 +116,17 @@ async def notion_set_page_content(notion_client, page, body, properties):
                 f'\tERROR: Could not set property `{prop.name}`: {e}'
             )
 
+    # Convert body markdown to notion blocks and upload to notion
+    notion_blocks = convert_md_to_notion(body)
+    for idx, block_descriptor in enumerate(notion_blocks):
+        pct = (idx + 1) / len(notion_blocks) * 100
+        print(
+            f'Uploading {block_descriptor["type"].__name__}, '
+            f'{idx+1}/{len(notion_blocks)} ({pct:.1f}%)'
+        )
+        upload_notion_block(block_descriptor, page, None)
+
+    print(f'Finished setting content for page: {page.get_browseable_url()}')
 
 @app.route('/add_db_row', methods=['POST'])
 async def add_db_row_handler(request):
