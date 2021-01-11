@@ -1,9 +1,8 @@
-
 import os
+from typing import NamedTuple
 
 from sanic import Sanic
 from sanic import response
-from sanic.response import json
 from sanic.exceptions import InvalidUsage
 
 from urllib.error import HTTPError
@@ -16,29 +15,45 @@ from md2notion.upload import uploadBlock as upload_notion_block
 app = Sanic(__name__)
 
 
-def create_notion_db_row(token, db_url, body='', properties=[]):
+class NotionPageProperty(NamedTuple):
+    name: str
+    value: str
+
+
+def parse_add_db_row_request(request):
+    # Get request JSON
     try:
-        client = NotionClient(token_v2=token)
-    except HTTPError as e:
+        json_data = request.json
+    except InvalidUsage:
         raise AppException(
-            f'Could not login to notion: {e}'
+            'Body was not sent in JSON format'
         )
 
-    # Add new row
-    cv = client.get_collection_view(db_url)
-    row = cv.collection.add_row()
+    # Verify request - required params
+    required_params = ['db_url']
+    missing_params = set(required_params) - set(json_data.keys())
+    if len(missing_params) > 0:
+        raise AppException(
+            f'JSON is missing required parameters: '
+            f'{", ".join(missing_params)}'
+        )
+
+    # Verify request - optional params
+    db_url = json_data.get('db_url', None)
+    body = json_data.get('body', '')
+    property_dicts = json_data.get('properties', [])
 
     errors = []
-
-    # Set properties
-    if type(properties) is not list:
+    if type(property_dicts) is not list:
         errors.append(
-            f'Could not set properties `{properties}`, '
+            f'Could not set properties `{property_dicts}`, '
             f'because it is not a list.'
         )
-        properties = []
+        property_dicts = []
 
-    for prop in properties:
+    # Parse properties into named tuples
+    properties = []
+    for prop in property_dicts:
         if type(prop) is not dict:
             errors.append(
                 f'Could not set property `{prop}`, '
@@ -55,35 +70,14 @@ def create_notion_db_row(token, db_url, body='', properties=[]):
             )
             continue
 
-        try:
-            row.set_property(prop_name, prop_value)
-        except (ValueError, AttributeError) as e:
-            errors.append(
-                f'Could not set property: {e}'
-            )
-
-    # Convert markdown to notion and set it as the body
-    notion_blocks = convert_md_to_notion(body)
-    for idx, block_descriptor in enumerate(notion_blocks):
-        pct = (idx + 1) / len(notion_blocks) * 100
-        print(
-            f'Uploading {block_descriptor["type"].__name__}, '
-            f'{idx+1}/{len(notion_blocks)} ({pct:.1f}%)'
+        properties.append(
+            NotionPageProperty(prop_name, prop_value)
         )
-        upload_notion_block(block_descriptor, row, None)
 
-    # Return result
-    result = {}
-    result['status'] = 'success'
-    result['added_url'] = row.get_browseable_url()
-    if len(errors) > 0:
-        result['errors'] = errors
-
-    return result
+    return (db_url, body, properties, errors)
 
 
-@app.route('/add_db_row', methods=['POST'])
-def add_db_row_handler(request):
+def notion_login():
     notion_token = os.environ.get('TOKEN')
     if notion_token is None:
         raise AppException(
@@ -92,25 +86,68 @@ def add_db_row_handler(request):
         )
 
     try:
-        json_data = request.json
-    except InvalidUsage:
+        notion_client = NotionClient(token_v2=notion_token)
+    except HTTPError as e:
         raise AppException(
-            'Body was not sent in JSON format'
+            f'Could not login to notion: {e}'
         )
 
-    required_params = ['db_url']
-    missing_params = set(required_params) - set(json_data.keys())
-    if len(missing_params) > 0:
-        raise AppException(
-            f'JSON is missing required parameters: '
-            f'{", ".join(missing_params)}'
+    return notion_client
+
+
+def notion_add_db_row(notion_client, db_url):
+    db = notion_client.get_collection_view(db_url)
+
+    print(f'Creating new row in db {db.parent.title}')
+    row = db.collection.add_row()
+
+    return row
+
+
+async def notion_set_page_content(notion_client, page, body, properties):
+    print(f'Setting content for page: {page.get_browseable_url()}')
+    # Convert body markdown to notion blocks and upload to notion
+    notion_blocks = convert_md_to_notion(body)
+    for idx, block_descriptor in enumerate(notion_blocks):
+        pct = (idx + 1) / len(notion_blocks) * 100
+        print(
+            f'Uploading {block_descriptor["type"].__name__}, '
+            f'{idx+1}/{len(notion_blocks)} ({pct:.1f}%)'
         )
+        upload_notion_block(block_descriptor, page, None)
 
-    body = json_data.get('body', '')
-    properties = json_data.get('properties', [])
-    db_url = json_data.get('db_url', None)
+    for prop in properties:
+        print(f'Setting property `{prop.name}` to `{prop.value}`...')
+        try:
+            page.set_property(prop.name, prop.value)
+        except (ValueError, AttributeError) as e:
+            print(
+                f'\tERROR: Could not set property `{prop.name}`: {e}'
+            )
 
-    result = create_notion_db_row(notion_token, db_url, body, properties)
+
+@app.route('/add_db_row', methods=['POST'])
+async def add_db_row_handler(request):
+
+    db_url, body, properties, errors = parse_add_db_row_request(request)
+
+    notion_client = notion_login()
+    new_row = notion_add_db_row(notion_client, db_url)
+
+    result = {}
+    result['status'] = 'background_processing'
+    result['new_row_url'] = new_row.get_browseable_url()
+    if len(errors) > 0:
+        result['errors'] = errors
+
+    # This part can take a LONG time and zapier and integromat time out
+    # if the request takes too long.
+    #
+    # So we return the request after creating the page, but before
+    # uploading all the content
+    request.app.add_task(
+        notion_set_page_content(notion_client, new_row, body, properties)
+    )
 
     return response.json(result)
 
