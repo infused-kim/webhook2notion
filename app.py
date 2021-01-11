@@ -20,6 +20,26 @@ class NotionPageProperty(NamedTuple):
     value: str
 
 
+def check_secret(request):
+    correct_secret = os.environ.get('SECRET')
+    if correct_secret is None:
+        raise AppException(
+            'Please configure password using the environment variable `SECRET`'
+        )
+
+    request_secret = request.args.get('secret', None)
+    if request_secret is None:
+        raise AppException(
+            'Auth Failure: Please include app password using the '
+            '`?secret=XXX` url query parameter.'
+        )
+    if request_secret != correct_secret:
+        raise AppException(
+            f'Auth Failure: The submitted secret query parameter '
+            f'`{request_secret}` does not match the configured secret.'
+        )
+
+
 def parse_add_db_row_request(request):
     # Get request JSON
     try:
@@ -128,8 +148,10 @@ async def notion_set_page_content(notion_client, page, body, properties):
 
     print(f'Finished setting content for page: {page.get_browseable_url()}')
 
+
 @app.route('/add_db_row', methods=['POST'])
 async def add_db_row_handler(request):
+    check_secret(request)
 
     db_url, body, properties, errors = parse_add_db_row_request(request)
 
