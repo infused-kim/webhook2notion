@@ -1,6 +1,14 @@
 {
-  "name": "Webhook 2 Notion table",
-  "description": "Create a webhook where you can send todo's that will be added to your notion account",
-  "repository": "https://git.heroku.com/nameless-scrubland-94978.git",
-  "keywords": ["notion", "webhook", "notion-py"]
+  "name": "Webhook 2 Notion",
+  "description": "Create a webhook that allows you to add rows to notion databases. Can be used with Zapier and Integromat for automations.",
+  "repository": "https://github.com/infused-kim/webhook2notion",
+  "keywords": ["notion", "webhook", "notion-py"],
+  "env": {
+    "SECRET": {
+      "description": "A password used for authentication using the `?secret=XXX` query parameter."
+      },
+      "TOKEN": {
+      "description": "Your Notion API token extracted from a notion cookie."
+      }
+    }
 }
